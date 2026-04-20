@@ -30,7 +30,7 @@
 - Upgrade pip version
   - _python -m pip install --upgrade pip_
 - Download packages that are used in this script
-  - _pip install —upgrade pandas numpy tabulate math cmath matplotlib pprint_
+  - _pip install —upgrade pandas numpy openpyxl math matplotlib_
 
 ---
 
