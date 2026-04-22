@@ -73,6 +73,11 @@ def main() -> None:
         bid_adder=BID_ADDER,
     )
 
+    results["all_dispatch_results"].to_csv(
+        OUTPUT_DIR / "dispatch_detailed.csv",
+        index=False
+    )
+    
     portfolio_summary = results["portfolio_summary"].copy()
     hourly_price_summary = results["hourly_price_summary"].copy()
     all_daily = results["all_daily_results"].copy()

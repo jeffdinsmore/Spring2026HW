@@ -460,10 +460,14 @@ def run_monte_carlo(
 
     all_daily = []
     all_hourly_market = []
+    all_dispatch = []
 
     for sim in range(1, n_sims + 1):
         sim_results = run_one_day_simulation(df_units=df_units, rng=rng, bid_adder=bid_adder)
-
+        
+        dispatch = collect_dispatch_results(sim_results, sim)
+        all_dispatch.append(dispatch)
+        
         daily = sim_results["daily_portfolio"].copy()
         daily["simulation"] = sim
 
@@ -475,6 +479,7 @@ def run_monte_carlo(
 
     all_daily_df = pd.concat(all_daily, ignore_index=True)
     all_hourly_market_df = pd.concat(all_hourly_market, ignore_index=True)
+    all_dispatch_df = pd.concat(all_dispatch, ignore_index=True)
 
     portfolio_summary = (
         all_daily_df.groupby(["utility_number", "utility_name", "location"], as_index=False)
@@ -513,6 +518,7 @@ def run_monte_carlo(
         "all_hourly_market_results": all_hourly_market_df,
         "portfolio_summary": portfolio_summary,
         "hourly_price_summary": hourly_price_summary,
+        "all_dispatch_results": all_dispatch_df,
     }
 
 
@@ -581,3 +587,8 @@ def run_deterministic_hour_case(
             }]
         ),
     }
+
+def collect_dispatch_results(sim_results, sim_number):
+    dispatch = sim_results["hourly_unit_dispatch"].copy()
+    dispatch["simulation"] = sim_number
+    return dispatch
