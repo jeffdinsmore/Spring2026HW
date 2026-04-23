@@ -629,3 +629,138 @@ def clear_regional_market(
     Clear one region using the same existing uniform-price logic.
     """
     return clear_uniform_price_market(stack=stack, demand_mw=demand_mw)
+
+def sample_regional_demand_mw(region: str, hour: int, rng: np.random.Generator) -> float:
+    """
+    Sample demand for one region and one hour from a Normal distribution
+    centered at that region's forecast.
+    """
+    if region == "West":
+        mean = WEST_LOAD_FORECAST[hour]
+    elif region == "East":
+        mean = EAST_LOAD_FORECAST[hour]
+    else:
+        raise ValueError(f"Unknown region: {region}")
+
+    sigma = DEMAND_SIGMA_FRAC * mean
+    demand = rng.normal(loc=mean, scale=sigma)
+    return max(0.0, float(demand))
+
+
+def determine_constrained_transfer(
+    west_stack: pd.DataFrame,
+    east_stack: pd.DataFrame,
+    west_demand_mw: float,
+    east_demand_mw: float,
+    transmission_limit_mw: float,
+) -> Dict[str, float]:
+    """
+    Determine transfer direction and magnitude under a transmission cap.
+
+    Positive transfer_mw means East exports to West.
+    Negative transfer_mw means West exports to East.
+
+    We first compare each region's total available supply to its own demand,
+    then allow transfer from the surplus side to the deficit side, capped by
+    the transmission limit.
+    """
+    west_available = get_regional_total_available(west_stack)
+    east_available = get_regional_total_available(east_stack)
+
+    west_surplus = west_available - west_demand_mw
+    east_surplus = east_available - east_demand_mw
+
+    transfer_mw = 0.0
+
+    # East exports to West
+    if east_surplus > 0.0 and west_surplus < 0.0:
+        east_export_capability = east_surplus
+        west_import_need = -west_surplus
+        transfer_mw = min(east_export_capability, west_import_need, transmission_limit_mw)
+
+    # West exports to East
+    elif west_surplus > 0.0 and east_surplus < 0.0:
+        west_export_capability = west_surplus
+        east_import_need = -east_surplus
+        transfer_mw = -min(west_export_capability, east_import_need, transmission_limit_mw)
+
+    return {
+        "west_available_mw": west_available,
+        "east_available_mw": east_available,
+        "west_demand_mw": west_demand_mw,
+        "east_demand_mw": east_demand_mw,
+        "west_surplus_mw": west_surplus,
+        "east_surplus_mw": east_surplus,
+        "transfer_mw": transfer_mw,
+    }
+
+
+def clear_two_region_market(
+    west_stack: pd.DataFrame,
+    east_stack: pd.DataFrame,
+    west_demand_mw: float,
+    east_demand_mw: float,
+    transmission_limit_mw: float,
+) -> Dict[str, object]:
+    """
+    Clear East and West markets separately with capped transfer.
+
+    Convention:
+    - transfer_mw > 0: East exports to West
+    - transfer_mw < 0: West exports to East
+    """
+    transfer_info = determine_constrained_transfer(
+        west_stack=west_stack,
+        east_stack=east_stack,
+        west_demand_mw=west_demand_mw,
+        east_demand_mw=east_demand_mw,
+        transmission_limit_mw=transmission_limit_mw,
+    )
+
+    transfer_mw = float(transfer_info["transfer_mw"])
+
+    # Adjust net demand after transfer
+    west_net_demand = west_demand_mw - transfer_mw
+    east_net_demand = east_demand_mw + transfer_mw
+
+    west_dispatch, west_price, west_blackout = clear_regional_market(
+        stack=west_stack,
+        demand_mw=west_net_demand,
+    )
+    east_dispatch, east_price, east_blackout = clear_regional_market(
+        stack=east_stack,
+        demand_mw=east_net_demand,
+    )
+
+    west_dispatch["region"] = "West"
+    east_dispatch["region"] = "East"
+
+    west_dispatch["regional_demand_mw"] = west_demand_mw
+    east_dispatch["regional_demand_mw"] = east_demand_mw
+
+    west_dispatch["net_demand_after_transfer_mw"] = west_net_demand
+    east_dispatch["net_demand_after_transfer_mw"] = east_net_demand
+
+    west_dispatch["transfer_mw"] = transfer_mw
+    east_dispatch["transfer_mw"] = transfer_mw
+
+    west_dispatch["regional_market_clearing_price"] = west_price
+    east_dispatch["regional_market_clearing_price"] = east_price
+
+    west_dispatch["regional_blackout"] = west_blackout
+    east_dispatch["regional_blackout"] = east_blackout
+
+    combined_dispatch = pd.concat([west_dispatch, east_dispatch], ignore_index=True)
+
+    return {
+        "west_dispatch": west_dispatch,
+        "east_dispatch": east_dispatch,
+        "combined_dispatch": combined_dispatch,
+        "west_price": west_price,
+        "east_price": east_price,
+        "west_blackout": west_blackout,
+        "east_blackout": east_blackout,
+        "transfer_info": transfer_info,
+        "west_net_demand_mw": west_net_demand,
+        "east_net_demand_mw": east_net_demand,
+    }
