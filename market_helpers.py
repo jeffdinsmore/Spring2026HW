@@ -764,3 +764,177 @@ def clear_two_region_market(
         "west_net_demand_mw": west_net_demand,
         "east_net_demand_mw": east_net_demand,
     }
+
+def run_one_day_simulation_constrained(
+    df_units: pd.DataFrame,
+    rng: np.random.Generator,
+    transmission_limit_mw: float,
+    bid_adder: float = 0.0,
+    blackout_penalty_per_portfolio: float = 10_000.0,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Run one 4-hour day with East/West transmission constraints.
+
+    - West and East demands are sampled separately
+    - Renewable randomness is shared by technology across both regions
+    - West and East clear at separate prices when constrained
+    """
+    units = df_units.copy()
+
+    previous_on = {int(unit_id): False for unit_id in units["unit_id"].tolist()}
+
+    hourly_market_rows: List[dict] = []
+    hourly_dispatch_frames: List[pd.DataFrame] = []
+
+    daily_portfolio = initialize_daily_portfolio_tracking(units)
+
+    fixed_by_portfolio = (
+        units.groupby(["utility_number", "utility_name"], as_index=False)[["fixed_daily_om_cost"]]
+        .sum()
+        .sort_values(by="utility_number")
+    )
+
+    daily_portfolio = daily_portfolio.drop(columns=["fixed_daily_om_cost"])
+    daily_portfolio = daily_portfolio.merge(
+        fixed_by_portfolio,
+        on=["utility_number", "utility_name"],
+        how="left",
+    )
+    daily_portfolio["fixed_daily_om_cost"] = daily_portfolio["fixed_daily_om_cost"].fillna(0.0)
+
+    for hour in range(1, 5):
+        west_demand_mw = sample_regional_demand_mw("West", hour, rng)
+        east_demand_mw = sample_regional_demand_mw("East", hour, rng)
+
+        tech_cfs = sample_hourly_technology_capacity_factors(hour, rng)
+
+        west_stack = build_regional_supply_stack(
+            df_units=units,
+            region="West",
+            hour=hour,
+            tech_cfs=tech_cfs,
+            bid_adder=bid_adder,
+        )
+        east_stack = build_regional_supply_stack(
+            df_units=units,
+            region="East",
+            hour=hour,
+            tech_cfs=tech_cfs,
+            bid_adder=bid_adder,
+        )
+
+        market_results = clear_two_region_market(
+            west_stack=west_stack,
+            east_stack=east_stack,
+            west_demand_mw=west_demand_mw,
+            east_demand_mw=east_demand_mw,
+            transmission_limit_mw=transmission_limit_mw,
+        )
+
+        dispatch = market_results["combined_dispatch"].copy()
+        dispatch["hour"] = hour
+
+        west_price = market_results["west_price"]
+        east_price = market_results["east_price"]
+        west_blackout = market_results["west_blackout"]
+        east_blackout = market_results["east_blackout"]
+        transfer_info = market_results["transfer_info"]
+
+        # Revenue and operating cost are regional-price based
+        dispatch["market_clearing_price"] = dispatch["regional_market_clearing_price"]
+        dispatch["demand_mw"] = dispatch["regional_demand_mw"]
+        dispatch["blackout"] = dispatch["regional_blackout"]
+
+        # Blackout penalty is assessed only to portfolios in the affected region
+        if west_blackout:
+            west_mask = daily_portfolio["location"] == "West"
+            daily_portfolio.loc[west_mask, "blackout_penalty"] += blackout_penalty_per_portfolio
+
+        if east_blackout:
+            east_mask = daily_portfolio["location"] == "East"
+            daily_portfolio.loc[east_mask, "blackout_penalty"] += blackout_penalty_per_portfolio
+
+        # Only non-blackout regional dispatch earns revenue
+        dispatch["revenue"] = np.where(
+            dispatch["regional_blackout"],
+            0.0,
+            dispatch["dispatched_mw"] * dispatch["regional_market_clearing_price"],
+        )
+        dispatch["variable_cost"] = dispatch["dispatched_mw"] * dispatch["incremental_cost"]
+
+        # Startup cost: unit on now after being off in previous hour
+        startup_costs = []
+        current_on = {}
+        for _, row in dispatch.iterrows():
+            unit_id = int(row["unit_id"])
+            on_now = float(row["dispatched_mw"]) > 1e-9
+            current_on[unit_id] = on_now
+
+            startup = float(row["startup_cost"]) if (on_now and not previous_on[unit_id]) else 0.0
+            startup_costs.append(startup)
+
+        dispatch["startup_cost_incurred"] = startup_costs
+        previous_on = current_on
+
+        hour_portfolio = (
+            dispatch.groupby(["utility_number", "utility_name"], as_index=False)
+            .agg(
+                revenue=("revenue", "sum"),
+                variable_cost=("variable_cost", "sum"),
+                startup_cost=("startup_cost_incurred", "sum"),
+            )
+        )
+
+        daily_portfolio = daily_portfolio.merge(
+            hour_portfolio,
+            on=["utility_number", "utility_name"],
+            how="left",
+            suffixes=("", "_hour"),
+        )
+
+        for col in ["revenue", "variable_cost", "startup_cost"]:
+            hour_col = f"{col}_hour"
+            if hour_col in daily_portfolio.columns:
+                daily_portfolio[col] = daily_portfolio[col] + daily_portfolio[hour_col].fillna(0.0)
+                daily_portfolio = daily_portfolio.drop(columns=[hour_col])
+
+        hourly_market_rows.append(
+            {
+                "hour": hour,
+                "west_forecast_demand_mw": WEST_LOAD_FORECAST[hour],
+                "east_forecast_demand_mw": EAST_LOAD_FORECAST[hour],
+                "west_sampled_demand_mw": west_demand_mw,
+                "east_sampled_demand_mw": east_demand_mw,
+                "west_net_demand_after_transfer_mw": market_results["west_net_demand_mw"],
+                "east_net_demand_after_transfer_mw": market_results["east_net_demand_mw"],
+                "west_market_clearing_price": west_price,
+                "east_market_clearing_price": east_price,
+                "west_blackout": west_blackout,
+                "east_blackout": east_blackout,
+                "transfer_mw": transfer_info["transfer_mw"],
+                "transmission_limit_mw": transmission_limit_mw,
+                "offshore_wind_cf": tech_cfs.get("Offshore Wind", np.nan),
+                "onshore_wind_cf": tech_cfs.get("Onshore Wind", np.nan),
+                "solar_cf": tech_cfs.get("Solar", np.nan),
+                "wave_cf": tech_cfs.get("Wave", np.nan),
+            }
+        )
+
+        hourly_dispatch_frames.append(dispatch)
+
+    daily_portfolio["profit"] = (
+        daily_portfolio["revenue"]
+        - daily_portfolio["variable_cost"]
+        - daily_portfolio["startup_cost"]
+        - daily_portfolio["fixed_daily_om_cost"]
+        - daily_portfolio["blackout_penalty"]
+    )
+
+    hourly_market = pd.DataFrame(hourly_market_rows)
+    hourly_unit_dispatch = pd.concat(hourly_dispatch_frames, ignore_index=True)
+
+    return {
+        "hourly_market": hourly_market,
+        "hourly_unit_dispatch": hourly_unit_dispatch,
+        "daily_portfolio": daily_portfolio.sort_values("utility_number").reset_index(drop=True),
+    }
