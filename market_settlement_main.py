@@ -17,7 +17,8 @@ from market_helpers import (
     clean_portfolio_dataframe,
     portfolio_summary_table,
     run_deterministic_hour_case,
-    run_monte_carlo,
+    run_full_8day_monte_carlo,
+    #run_monte_carlo,
 )
 
 
@@ -37,7 +38,7 @@ N_SIMS = 500
 BID_ADDER = 0.0
 
 # Output folder for CSV summaries and plots.
-OUTPUT_DIR = Path("msg_outputs")
+OUTPUT_DIR = Path("msg_outputs2")
 
 
 # ------------------------------------------------------------
@@ -66,36 +67,89 @@ def main() -> None:
     # --------------------------------------------------------
     # Step 3: Run Monte Carlo baseline for one representative day.
     # --------------------------------------------------------
-    results = run_monte_carlo(
+    results = run_full_8day_monte_carlo(
         df_units=df_units,
         n_sims=N_SIMS,
         random_seed=42,
         bid_adder=BID_ADDER,
     )
 
-    results["all_dispatch_results"].to_csv(
-        OUTPUT_DIR / "dispatch_detailed.csv",
-        index=False
-    )
-    
-    portfolio_summary = results["portfolio_summary"].copy()
-    hourly_price_summary = results["hourly_price_summary"].copy()
-    all_daily = results["all_daily_results"].copy()
+    days_1_4 = results["days_1_4_unconstrained"]
+    days_5_6 = results["days_5_6_constrained_2500"]
+    days_7_8 = results["days_7_8_constrained_2000"]
+    combined_8day = results["combined_8day_total"]
+
+    portfolio_summary = combined_8day["portfolio_summary"].copy()
+    #hourly_price_summary = results["hourly_price_summary"].copy()
+    #all_daily = results["all_daily_results"].copy()
 
     # Save CSV outputs.
-    portfolio_summary.to_csv(OUTPUT_DIR / "portfolio_summary_baseline.csv", index=False)
-    hourly_price_summary.to_csv(OUTPUT_DIR / "hourly_price_summary_baseline.csv", index=False)
-    all_daily.to_csv(OUTPUT_DIR / "all_daily_results_baseline.csv", index=False)
+    # Days 1-4 outputs
+    days_1_4["portfolio_summary"].to_csv(
+        OUTPUT_DIR / "days_1_4_portfolio_summary.csv", index=False
+    )
+    days_1_4["hourly_price_summary"].to_csv(
+        OUTPUT_DIR / "days_1_4_hourly_price_summary.csv", index=False
+    )
+    days_1_4["all_daily_results"].to_csv(
+        OUTPUT_DIR / "days_1_4_all_daily_results.csv", index=False
+    )
+    days_1_4["all_dispatch_results"].to_csv(
+        OUTPUT_DIR / "days_1_4_dispatch_detailed.csv", index=False
+    )
+
+    # Days 5-6 outputs
+    days_5_6["portfolio_summary"].to_csv(
+        OUTPUT_DIR / "days_5_6_portfolio_summary.csv", index=False
+    )
+    days_5_6["hourly_price_summary"].to_csv(
+        OUTPUT_DIR / "days_5_6_hourly_price_summary.csv", index=False
+    )
+    days_5_6["all_daily_results"].to_csv(
+        OUTPUT_DIR / "days_5_6_all_daily_results.csv", index=False
+    )
+    days_5_6["all_dispatch_results"].to_csv(
+        OUTPUT_DIR / "days_5_6_dispatch_detailed.csv", index=False
+    )
+
+    # Days 7-8 outputs
+    days_7_8["portfolio_summary"].to_csv(
+        OUTPUT_DIR / "days_7_8_portfolio_summary.csv", index=False
+    )
+    days_7_8["hourly_price_summary"].to_csv(
+        OUTPUT_DIR / "days_7_8_hourly_price_summary.csv", index=False
+    )
+    days_7_8["all_daily_results"].to_csv(
+        OUTPUT_DIR / "days_7_8_all_daily_results.csv", index=False
+    )
+    days_7_8["all_dispatch_results"].to_csv(
+        OUTPUT_DIR / "days_7_8_dispatch_detailed.csv", index=False
+    )
+
+    # Combined 8-day output
+    portfolio_summary.to_csv(
+        OUTPUT_DIR / "combined_8day_portfolio_summary.csv", index=False
+    )
 
     print("\n" + "=" * 72)
-    print("MONTE CARLO BASELINE RESULTS")
+    print("COMBINED 8-DAY RESULTS")
     print("=" * 72)
     print(portfolio_summary.to_string(index=False))
 
     print("\n" + "=" * 72)
-    print("EXPECTED HOURLY PRICE SUMMARY")
+    print("DAYS 1-4 HOURLY PRICE SUMMARY")
     print("=" * 72)
-    print(hourly_price_summary.to_string(index=False))
+    print(days_1_4["hourly_price_summary"].to_string(index=False))
+
+    print("\n" + "=" * 72)
+    print("DAYS 5-6 HOURLY PRICE SUMMARY")
+    print("=" * 72)
+    print(days_5_6["hourly_price_summary"].to_string(index=False))
+
+    print("\n" + "=" * 72)
+    print("DAYS 7-8 HOURLY PRICE SUMMARY")
+    print("=" * 72)
+    print(days_7_8["hourly_price_summary"].to_string(index=False))
 
     # --------------------------------------------------------
     # Step 4: Deterministic reference case for the write-up.
@@ -114,10 +168,153 @@ def main() -> None:
     print(det_9000["market_info"].to_string(index=False))
     print(det_9000["portfolio_hour"].to_string(index=False))
 
+    print("\nFiles written to:")
+    print(OUTPUT_DIR.resolve())
+
     # --------------------------------------------------------
-    # Step 5: Make plots.
+    # Step 5: Make plots for the 3 market phases + combined
     # --------------------------------------------------------
 
+    # Plot 1: Days 1-4 expected 4-day profit by portfolio
+    plot_days_1_4 = days_1_4["portfolio_summary"].copy()
+    plot_days_1_4["expected_4day_profit"] = 4.0 * plot_days_1_4["expected_daily_profit"]
+
+    plt.figure(figsize=(10, 6))
+    plt.bar(plot_days_1_4["utility_name"], plot_days_1_4["expected_4day_profit"])
+    plt.xticks(rotation=30, ha="right")
+    plt.ylabel("Expected Profit ($)")
+    plt.title("Days 1-4 Expected Profit by Portfolio")
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "days_1_4_expected_profit_by_portfolio.png", dpi=200)
+    plt.close()
+
+
+    # Plot 2: Days 5-6 expected 2-day profit by portfolio
+    plot_days_5_6 = days_5_6["portfolio_summary"].copy()
+    plot_days_5_6["expected_2day_profit"] = 2.0 * plot_days_5_6["expected_daily_profit"]
+
+    plt.figure(figsize=(10, 6))
+    plt.bar(plot_days_5_6["utility_name"], plot_days_5_6["expected_2day_profit"])
+    plt.xticks(rotation=30, ha="right")
+    plt.ylabel("Expected Profit ($)")
+    plt.title("Days 5-6 Expected Profit by Portfolio (2500 MW Transfer Limit)")
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "days_5_6_expected_profit_by_portfolio.png", dpi=200)
+    plt.close()
+
+
+    # Plot 3: Days 7-8 expected 2-day profit by portfolio
+    plot_days_7_8 = days_7_8["portfolio_summary"].copy()
+    plot_days_7_8["expected_2day_profit"] = 2.0 * plot_days_7_8["expected_daily_profit"]
+
+    plt.figure(figsize=(10, 6))
+    plt.bar(plot_days_7_8["utility_name"], plot_days_7_8["expected_2day_profit"])
+    plt.xticks(rotation=30, ha="right")
+    plt.ylabel("Expected Profit ($)")
+    plt.title("Days 7-8 Expected Profit by Portfolio (2000 MW Transfer Limit)")
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "days_7_8_expected_profit_by_portfolio.png", dpi=200)
+    plt.close()
+
+
+    # Plot 4: Combined 8-day expected profit by portfolio
+    plt.figure(figsize=(10, 6))
+    plt.bar(portfolio_summary["utility_name"], portfolio_summary["expected_8day_profit"])
+    plt.xticks(rotation=30, ha="right")
+    plt.ylabel("Expected Profit ($)")
+    plt.title("Combined 8-Day Expected Profit by Portfolio")
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "combined_8day_expected_profit_by_portfolio.png", dpi=200)
+    plt.close()
+
+    # Plot 5: Days 1-4 expected market clearing price by hour
+    price_days_1_4 = days_1_4["hourly_price_summary"].copy()
+
+    plt.figure(figsize=(8, 5))
+    plt.errorbar(
+        price_days_1_4["hour"],
+        price_days_1_4["expected_price"],
+        yerr=price_days_1_4["price_std"],
+        marker="o",
+        linestyle="-",
+        capsize=4,
+    )
+    plt.xticks([1, 2, 3, 4])
+    plt.xlabel("Hour")
+    plt.ylabel("Market Clearing Price ($/MWh)")
+    plt.title("Days 1-4 Expected Market Clearing Price by Hour")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "days_1_4_market_clearing_price_by_hour.png", dpi=200)
+    plt.close()
+
+
+    # Plot 6: Days 5-6 expected West and East market clearing price by hour
+    price_days_5_6 = days_5_6["hourly_price_summary"].copy()
+
+    plt.figure(figsize=(8, 5))
+    plt.errorbar(
+        price_days_5_6["hour"],
+        price_days_5_6["expected_west_price"],
+        yerr=price_days_5_6["west_price_std"],
+        marker="o",
+        linestyle="-",
+        capsize=4,
+        label="West",
+    )
+    plt.errorbar(
+        price_days_5_6["hour"],
+        price_days_5_6["expected_east_price"],
+        yerr=price_days_5_6["east_price_std"],
+        marker="s",
+        linestyle="-",
+        capsize=4,
+        label="East",
+    )
+    plt.xticks([1, 2, 3, 4])
+    plt.xlabel("Hour")
+    plt.ylabel("Market Clearing Price ($/MWh)")
+    plt.title("Days 5-6 Expected Market Clearing Price by Hour")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "days_5_6_market_clearing_price_by_hour.png", dpi=200)
+    plt.close()
+
+
+    # Plot 7: Days 7-8 expected West and East market clearing price by hour
+    price_days_7_8 = days_7_8["hourly_price_summary"].copy()
+
+    plt.figure(figsize=(8, 5))
+    plt.errorbar(
+        price_days_7_8["hour"],
+        price_days_7_8["expected_west_price"],
+        yerr=price_days_7_8["west_price_std"],
+        marker="o",
+        linestyle="-",
+        capsize=4,
+        label="West",
+    )
+    plt.errorbar(
+        price_days_7_8["hour"],
+        price_days_7_8["expected_east_price"],
+        yerr=price_days_7_8["east_price_std"],
+        marker="s",
+        linestyle="-",
+        capsize=4,
+        label="East",
+    )
+    plt.xticks([1, 2, 3, 4])
+    plt.xlabel("Hour")
+    plt.ylabel("Market Clearing Price ($/MWh)")
+    plt.title("Days 7-8 Expected Market Clearing Price by Hour")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "days_7_8_market_clearing_price_by_hour.png", dpi=200)
+    plt.close()
+
+    """
     # Plot 1: Expected clearing price by hour.
     plt.figure(figsize=(8, 5))
     plt.errorbar(
@@ -172,9 +369,9 @@ def main() -> None:
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR / "daily_revenue_variability_by_portfolio.png", dpi=200)
     plt.close()
+    """
 
-    print("\nFiles written to:")
-    print(OUTPUT_DIR.resolve())
+    
 
 
 if __name__ == "__main__":

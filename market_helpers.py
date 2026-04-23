@@ -938,3 +938,183 @@ def run_one_day_simulation_constrained(
         "hourly_unit_dispatch": hourly_unit_dispatch,
         "daily_portfolio": daily_portfolio.sort_values("utility_number").reset_index(drop=True),
     }
+
+def run_monte_carlo_constrained(
+    df_units: pd.DataFrame,
+    transmission_limit_mw: float,
+    n_sims: int = 500,
+    random_seed: int = 42,
+    bid_adder: float = 0.0,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Run multiple constrained 4-hour day simulations for one transmission limit.
+    """
+    rng = np.random.default_rng(random_seed)
+
+    all_daily = []
+    all_hourly_market = []
+    all_dispatch = []
+
+    for sim in range(1, n_sims + 1):
+        sim_results = run_one_day_simulation_constrained(
+            df_units=df_units,
+            rng=rng,
+            transmission_limit_mw=transmission_limit_mw,
+            bid_adder=bid_adder,
+        )
+
+        daily = sim_results["daily_portfolio"].copy()
+        daily["simulation"] = sim
+
+        hourly_market = sim_results["hourly_market"].copy()
+        hourly_market["simulation"] = sim
+
+        dispatch = sim_results["hourly_unit_dispatch"].copy()
+        dispatch["simulation"] = sim
+
+        all_daily.append(daily)
+        all_hourly_market.append(hourly_market)
+        all_dispatch.append(dispatch)
+
+    all_daily_df = pd.concat(all_daily, ignore_index=True)
+    all_hourly_market_df = pd.concat(all_hourly_market, ignore_index=True)
+    all_dispatch_df = pd.concat(all_dispatch, ignore_index=True)
+
+    portfolio_summary = (
+        all_daily_df.groupby(["utility_number", "utility_name", "location"], as_index=False)
+        .agg(
+            expected_daily_revenue=("revenue", "mean"),
+            revenue_std=("revenue", "std"),
+            expected_daily_profit=("profit", "mean"),
+            profit_std=("profit", "std"),
+            expected_variable_cost=("variable_cost", "mean"),
+            expected_startup_cost=("startup_cost", "mean"),
+            fixed_daily_om_cost=("fixed_daily_om_cost", "mean"),
+            expected_blackout_penalty=("blackout_penalty", "mean"),
+        )
+        .sort_values("utility_number")
+        .reset_index(drop=True)
+    )
+
+    hourly_price_summary = (
+        all_hourly_market_df.groupby("hour", as_index=False)
+        .agg(
+            expected_west_price=("west_market_clearing_price", "mean"),
+            west_price_std=("west_market_clearing_price", "std"),
+            expected_east_price=("east_market_clearing_price", "mean"),
+            east_price_std=("east_market_clearing_price", "std"),
+            expected_transfer_mw=("transfer_mw", "mean"),
+            west_blackout_rate=("west_blackout", "mean"),
+            east_blackout_rate=("east_blackout", "mean"),
+        )
+        .sort_values("hour")
+        .reset_index(drop=True)
+    )
+
+    return {
+        "all_daily_results": all_daily_df,
+        "all_hourly_market_results": all_hourly_market_df,
+        "all_dispatch_results": all_dispatch_df,
+        "portfolio_summary": portfolio_summary,
+        "hourly_price_summary": hourly_price_summary,
+    }
+
+
+def run_full_8day_monte_carlo(
+    df_units: pd.DataFrame,
+    n_sims: int = 500,
+    random_seed: int = 42,
+    bid_adder: float = 0.0,
+) -> Dict[str, Dict[str, pd.DataFrame]]:
+    """
+    Run the full 8-day MSG structure:
+    - Days 1-4: unconstrained
+    - Days 5-6: constrained at 2500 MW
+    - Days 7-8: constrained at 2000 MW
+    """
+    days_1_4 = run_monte_carlo(
+        df_units=df_units,
+        n_sims=n_sims,
+        random_seed=random_seed,
+        bid_adder=bid_adder,
+    )
+
+    days_5_6 = run_monte_carlo_constrained(
+        df_units=df_units,
+        transmission_limit_mw=2500.0,
+        n_sims=n_sims,
+        random_seed=random_seed + 1,
+        bid_adder=bid_adder,
+    )
+
+    days_7_8 = run_monte_carlo_constrained(
+        df_units=df_units,
+        transmission_limit_mw=2000.0,
+        n_sims=n_sims,
+        random_seed=random_seed + 2,
+        bid_adder=bid_adder,
+    )
+
+    combined = days_1_4["portfolio_summary"][
+        ["utility_number", "utility_name", "location"]
+    ].copy()
+
+    combined = combined.merge(
+        days_1_4["portfolio_summary"][
+            ["utility_number", "expected_daily_revenue", "expected_daily_profit"]
+        ].rename(
+            columns={
+                "expected_daily_revenue": "days_1_4_daily_revenue",
+                "expected_daily_profit": "days_1_4_daily_profit",
+            }
+        ),
+        on="utility_number",
+        how="left",
+    )
+
+    combined = combined.merge(
+        days_5_6["portfolio_summary"][
+            ["utility_number", "expected_daily_revenue", "expected_daily_profit"]
+        ].rename(
+            columns={
+                "expected_daily_revenue": "days_5_6_daily_revenue",
+                "expected_daily_profit": "days_5_6_daily_profit",
+            }
+        ),
+        on="utility_number",
+        how="left",
+    )
+
+    combined = combined.merge(
+        days_7_8["portfolio_summary"][
+            ["utility_number", "expected_daily_revenue", "expected_daily_profit"]
+        ].rename(
+            columns={
+                "expected_daily_revenue": "days_7_8_daily_revenue",
+                "expected_daily_profit": "days_7_8_daily_profit",
+            }
+        ),
+        on="utility_number",
+        how="left",
+    )
+
+    combined["expected_8day_revenue"] = (
+        4.0 * combined["days_1_4_daily_revenue"]
+        + 2.0 * combined["days_5_6_daily_revenue"]
+        + 2.0 * combined["days_7_8_daily_revenue"]
+    )
+
+    combined["expected_8day_profit"] = (
+        4.0 * combined["days_1_4_daily_profit"]
+        + 2.0 * combined["days_5_6_daily_profit"]
+        + 2.0 * combined["days_7_8_daily_profit"]
+    )
+
+    return {
+        "days_1_4_unconstrained": days_1_4,
+        "days_5_6_constrained_2500": days_5_6,
+        "days_7_8_constrained_2000": days_7_8,
+        "combined_8day_total": {
+            "portfolio_summary": combined
+        },
+    }

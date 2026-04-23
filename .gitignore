@@ -28,6 +28,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 msg_outputs
+msg_outputs2
+
 
 # --- PyInstaller ---
 *.manifest
