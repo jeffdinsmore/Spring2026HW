@@ -592,3 +592,40 @@ def collect_dispatch_results(sim_results, sim_number):
     dispatch = sim_results["hourly_unit_dispatch"].copy()
     dispatch["simulation"] = sim_number
     return dispatch
+
+def build_regional_supply_stack(
+    df_units: pd.DataFrame,
+    region: str,
+    hour: int,
+    tech_cfs: Dict[str, float],
+    bid_adder: float = 0.0,
+) -> pd.DataFrame:
+    """
+    Build the hourly supply stack for one region only ("West" or "East").
+
+    This is the regional version of build_hourly_supply_stack.
+    """
+    regional_units = df_units[df_units["location"] == region].copy()
+    return build_hourly_supply_stack(
+        df_units=regional_units,
+        hour=hour,
+        tech_cfs=tech_cfs,
+        bid_adder=bid_adder,
+    )
+
+
+def get_regional_total_available(stack: pd.DataFrame) -> float:
+    """
+    Return total available MW in a regional stack.
+    """
+    return float(stack["available_capacity_mw"].sum())
+
+
+def clear_regional_market(
+    stack: pd.DataFrame,
+    demand_mw: float,
+) -> Tuple[pd.DataFrame, float, bool]:
+    """
+    Clear one region using the same existing uniform-price logic.
+    """
+    return clear_uniform_price_market(stack=stack, demand_mw=demand_mw)
